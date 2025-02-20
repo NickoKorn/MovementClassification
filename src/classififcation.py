@@ -1,80 +1,67 @@
 import pandas as pd
-import torch
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import accuracy_score
+import os
+
+# Pfade überprüfen
+print(os.getcwd())
+current_path = os.getcwd()
+uebergeordneter_pfad = os.path.dirname(current_path)
+print("Übergeordneter Pfad:", uebergeordneter_pfad)
+os.chdir('..')  # Eine Ebene zurückgehen
 
 # Daten mit Punkt als Dezimaltrennzeichen einlesen
-df = pd.read_csv('dataset_5secondWindow.csv', decimal='.')
+df = pd.read_csv('data/dataset_5secondWindow.csv', decimal='.')
 
-# 2. Preprocess the Data
-
+# Datenvorverarbeitung
 print(df.isnull().sum())
 
 for column in df.columns:
-    
     print(f'Spalte: {column}, Datentyp: {df[column].dtype}')
 
 numeric_cols = df.select_dtypes(include=['float64']).columns
 
 X = df.drop(['target', 'id', 'user'], axis=1)
 y = df['target']
-X.dropna()
+
+# Fehlende Werte durch Nullen ersetzen
+X[numeric_cols] = X[numeric_cols].fillna(0)
 
 scaler = StandardScaler()
-X[numeric_cols] = scaler.fit_transform(X[numeric_cols]) #enabled scaling
-
-# Korrelationsmatrix berechnen
-correlation_matrix = X[numeric_cols].corr()
-
-# Korrelationsmatrix anzeigen
-print(correlation_matrix)
+X[numeric_cols] = scaler.fit_transform(X[numeric_cols])
 
 label_encoder = LabelEncoder()
 y = label_encoder.fit_transform(y)
 
-X_tensor = torch.tensor(X.values, dtype=torch.float32)
-y_tensor = torch.tensor(y, dtype=torch.long)
+# Cross-Validation-Setup
+kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)  # 5 Folds
+accuracies = []
 
-X_train, X_test, y_train, y_test = train_test_split(X_tensor, y_tensor, test_size=0.1, random_state=42)
+for fold, (train_index, val_index) in enumerate(kf.split(X, y)):
+    print(f"Fold {fold+1}")
+    X_train, X_val = X.iloc[train_index], X.iloc[val_index]
+    y_train, y_val = y[train_index], y[val_index]
 
-class SimpleClassifier(torch.nn.Module):
-    def __init__(self, input_size, num_classes):
-        super(SimpleClassifier, self).__init__()
-        self.fc1 = torch.nn.Linear(input_size, 64)
-        self.bn1 = torch.nn.BatchNorm1d(64)
-        self.relu = torch.nn.ReLU()
-        self.fc2 = torch.nn.Linear(64, num_classes)
+    # Modell (KNN)
+    knn = KNeighborsClassifier(n_neighbors=5)  # Du kannst n_neighbors anpassen
+    knn.fit(X_train, y_train)
 
-    def forward(self, x):
-        x = self.fc1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.fc2(x)
-        return x
+    # Vorhersagen auf dem Validierungsset
+    y_pred = knn.predict(X_val)
 
-input_size = X_train.shape[1]
-num_classes = len(label_encoder.classes_)
-model = SimpleClassifier(input_size, num_classes)
+    # Genauigkeit berechnen
+    accuracy = accuracy_score(y_val, y_pred)
+    accuracies.append(accuracy)
+    print(f'Fold {fold+1} Validation Accuracy: {accuracy:.4f}')
 
-criterion = torch.nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.0000001)
+# Durchschnittliche Genauigkeit
+mean_accuracy = sum(accuracies) / len(accuracies)
+print(f'Mean Cross-Validation Accuracy: {mean_accuracy:.4f}')
 
-num_epochs = 1000
-for epoch in range(num_epochs):
-    outputs = model(X_train)
-    loss = criterion(outputs, y_train)
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-    if (epoch + 1) % 10 == 0:
-        print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
-
-with torch.no_grad():
-    model.eval()
-    test_outputs = model(X_test)
-    _, predicted = torch.max(test_outputs, 1)
-    accuracy = (predicted == y_test).sum().item() / y_test.size(0)
-    print(f'Test Accuracy: {accuracy:.4f}')
-
-predicted_labels = label_encoder.inverse_transform(predicted.numpy())
+# Beispielvorhersagen auf dem ersten Fold-Validierungsset
+knn.fit(X.iloc[train_index], y[train_index]) #Fit with the last fold train data.
+predicted = knn.predict(X.iloc[val_index])
+predicted_labels = label_encoder.inverse_transform(predicted)
 print("Example predicted labels:", predicted_labels[:5])
